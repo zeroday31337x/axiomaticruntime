@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0",
+  "name": "ZDX Validated Baseline v1",
+  "origin": "zdx-validated",
+  "policy": {
+    "allowedCommands": [
+      "./help",
+      "./commands",
+      "./status",
+      "./get"
+    ],
+    "allowedTools": [],
+    "mutatingTools": [],
+    "nonMutatingCommands": [
+      "./help",
+      "./commands",
+      "./status",
+      "./get"
+    ]
+  }
+}
