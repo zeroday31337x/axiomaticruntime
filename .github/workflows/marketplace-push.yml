@@ -26,7 +26,9 @@ jobs:
       - name: Login to AWS Marketplace ECR
         shell: bash
         run: |
-          aws ecr get-login-password --region us-east-1 --registry-ids 709825985650 \
+          aws ecr get-authorization-token --region us-east-1 --registry-ids 709825985650 \
+            --query 'authorizationData[0].authorizationToken' --output text \
+            | base64 -d | cut -d: -f2- \
             | docker login --username AWS --password-stdin 709825985650.dkr.ecr.us-east-1.amazonaws.com
 
       - name: Set up Docker Buildx
