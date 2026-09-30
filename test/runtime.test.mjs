@@ -21,3 +21,4 @@ test('PRUNE shell operators in commands',()=>{for(const command of ['./status &&
 test('PRUNE non-string and non-canonical tools',()=>{for(const tool of [['write'],{toString:()=> 'write'},' write','write\n'])assert.equal(e({profile:p,proposal:{kind:'tool',tool},explicitAction:true}).decision,'PRUNE')});
 test('PRUNE trailing canonical-tool whitespace',()=>assert.equal(e({profile:p,proposal:{kind:'tool',tool:'write '},explicitAction:true}).decision,'PRUNE'));
 test('PRUNE leading canonical-tool whitespace',()=>assert.equal(e({profile:p,proposal:{kind:'tool',tool:' write'},explicitAction:true}).decision,'PRUNE'));
+test('PRUNE dot-slash command outside allowlist',()=>assert.equal(e({profile:p,proposal:{kind:'command',command:'./root'},explicitAction:true}).decision,'PRUNE'));
