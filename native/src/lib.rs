@@ -998,3 +998,566 @@ pub fn validate_profile(profile: &Value) -> Result<(String, String), String> {
         .any(|x| !array("allowedTools").contains(x))
     {
         return Err("mutatingTools must be a subset of allowedTools".into());
+    }
+    if array("nonMutatingCommands")
+        .iter()
+        .any(|x| !array("allowedCommands").contains(x))
+    {
+        return Err("nonMutatingCommands must be a subset of allowedCommands".into());
+    }
+    let hash = sha_text(&canonical_profile(profile)?);
+    if origin == "zdx-validated" && hash != VALIDATED_BASELINE_HASH {
+        return Err("zdx-validated profile does not match shipped validated baseline".into());
+    }
+    let class = if origin == "zdx-validated" {
+        "ZDX Validated"
+    } else {
+        "Customer Modified"
+    };
+    Ok((class.to_owned(), hash))
+}
+
+fn branch_id(proposal: &Value, kind: &str) -> String {
+    let mut m = serde_json::Map::new();
+    m.insert("kind".into(), Value::String(kind.to_owned()));
+    if let Some(v) = proposal.get("command") {
+        m.insert("command".into(), v.clone());
+    }
+    if let Some(v) = proposal.get("tool") {
+        m.insert("tool".into(), v.clone());
+    }
+    if let Some(v) = proposal.get("args") {
+        m.insert("args".into(), v.clone());
+    }
+    let serialized = serde_json::to_string(&Value::Object(m)).unwrap_or_default();
+    let full = sha_text(&serialized);
+    full.get(..16).unwrap_or(full.as_str()).to_owned()
+}
+
+fn policy_decision(decision: &str, branch_id: String, reason: &str) -> Value {
+    serde_json::json!({"decision":decision,"branchId":branch_id,"reason":reason})
+}
+
+fn with_canonical_action(result: Value, proposal: &Value, kind: &str) -> Value {
+    if !matches!(
+        result.get("decision").and_then(Value::as_str),
+        Some("RETAIN") | Some("GATE")
+    ) {
+        return result;
+    }
+    let mut action = serde_json::Map::new();
+    action.insert("kind".into(), Value::String(kind.to_owned()));
+    match kind {
+        "command" => {
+            if let Some(v) = proposal.get("command") {
+                action.insert("command".into(), v.clone());
+            }
+        }
+        "tool" => {
+            if let Some(v) = proposal.get("tool") {
+                action.insert("tool".into(), v.clone());
+            }
+        }
+        _ => {
+            if let Some(v) = proposal.get("reply") {
+                action.insert("reply".into(), v.clone());
+            }
+        }
+    }
+    if let Some(v) = proposal.get("args") {
+        action.insert("args".into(), v.clone());
+    }
+    let Some(mut out) = result.as_object().cloned() else {
+        return policy_decision(
+            "PRUNE",
+            "internal-error".into(),
+            "decision response malformed",
+        );
+    };
+    out.insert("canonicalAction".into(), Value::Object(action));
+    Value::Object(out)
+}
+
+pub fn evaluate_policy(input: &Value) -> Value {
+    let proposal = input.get("proposal").unwrap_or(&Value::Null);
+    let profile = input.get("profile").unwrap_or(&Value::Null);
+    let explicit = input
+        .get("explicitAction")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let Some(policy) = profile.get("policy") else {
+        return policy_decision(
+            "PRUNE",
+            "invalid-profile".into(),
+            "valid runtime profile required",
+        );
+    };
+    let kind = match proposal.get("kind").and_then(Value::as_str) {
+        Some("reply") => "reply",
+        Some("command") => "command",
+        Some("tool") => "tool",
+        _ if proposal.get("command").and_then(Value::as_str).is_some() => "command",
+        _ if proposal.get("tool").and_then(Value::as_str).is_some() => "tool",
+        _ => "reply",
+    };
+    let branch = branch_id(proposal, kind);
+    if kind == "reply" {
+        return match proposal.get("reply").and_then(Value::as_str) {
+            Some(s) if !s.trim().is_empty() => with_canonical_action(
+                policy_decision("RETAIN", branch, "schema-valid reply"),
+                proposal,
+                "reply",
+            ),
+            _ => policy_decision("PRUNE", branch, "empty reply"),
+        };
+    }
+    let array = |name: &str| -> &[Value] {
+        policy
+            .get(name)
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    };
+    if kind == "command" {
+        let Some(raw) = proposal.get("command").and_then(Value::as_str) else {
+            return policy_decision("PRUNE", branch, "command must be a string");
+        };
+        let cmd = raw.trim();
+        if raw != cmd {
+            return policy_decision("PRUNE", branch, "non-canonical command whitespace");
+        }
+        if cmd
+            .chars()
+            .any(|c| (c as u32) <= 31 || c == '\u{7f}' || ";\x26|<>\x60".contains(c))
+        {
+            return policy_decision(
+                "PRUNE",
+                branch,
+                "command contains prohibited control or shell operator",
+            );
+        }
+        let base = cmd.split_whitespace().next().unwrap_or("").to_lowercase();
+        let allowed = array("allowedCommands")
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|x| x.to_lowercase() == base);
+        if !cmd.starts_with("./") || !allowed {
+            return policy_decision("PRUNE", branch, "command outside allowlist");
+        }
+        let nonmutating = array("nonMutatingCommands")
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|x| x == base);
+        if !explicit && !nonmutating {
+            return with_canonical_action(
+                policy_decision("GATE", branch, "explicit action required"),
+                proposal,
+                "command",
+            );
+        }
+        if profile.get("origin").and_then(Value::as_str) == Some("zdx-validated")
+            && !array("allowedCommands")
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|x| x == cmd)
+        {
+            return policy_decision(
+                "PRUNE",
+                branch,
+                "validated baseline commands do not accept arguments",
+            );
+        }
+        return with_canonical_action(
+            policy_decision("RETAIN", branch, "allowed command"),
+            proposal,
+            "command",
+        );
+    }
+    let Some(tool) = proposal.get("tool").and_then(Value::as_str) else {
+        return policy_decision("PRUNE", branch, "tool must be a string");
+    };
+    let allowed = array("allowedTools")
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|x| x == tool);
+    if tool.is_empty()
+        || tool != tool.trim()
+        || tool.chars().any(|c| (c as u32) <= 31 || c == '\u{7f}')
+        || !allowed
+    {
+        return policy_decision("PRUNE", branch, "tool outside canonical allowlist");
+    }
+    let mutating = array("mutatingTools")
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|x| x == tool);
+    if mutating && !explicit {
+        return with_canonical_action(
+            policy_decision("GATE", branch, "mutating tool requires explicit action"),
+            proposal,
+            "tool",
+        );
+    }
+    with_canonical_action(
+        policy_decision("RETAIN", branch, "allowed tool call"),
+        proposal,
+        "tool",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ApprovalSigningFields, ClaimCode, ClaimInput, ClaimStatus, DecisionKind,
+        DecisionSigningFields, FileClaimStore, KeyRole, TrustedKey, VerifyCode, VerifyContext,
+        approval_signing_bytes, canonical_u64, decision_signing_bytes, load_keyring_file,
+        verify_approval, verify_decision, verify_envelope,
+    };
+    use std::collections::{HashMap, HashSet};
+    fn ctx<'a>(
+        keys: &'a HashMap<String, super::TrustedKey>,
+        revoked: &'a HashSet<String>,
+    ) -> VerifyContext<'a> {
+        VerifyContext {
+            keys,
+            revoked,
+            expected_audience: "zdx-executor",
+            expected_release: "release-1",
+            now: 1000,
+            skew: 5,
+            max_validity: 60,
+            max_body: 1_048_576,
+        }
+    }
+    fn envelope_with_times(issued: &str, expires: &str) -> Vec<u8> {
+        format!(r#"{{"decisionEnvelope":{{"type":"decision","version":"2","algorithm":"Ed25519","decision":"RETAIN","kid":"{}","releaseId":"release-1","audience":"zdx-executor","profileHash":"{}","canonicalActionHash":"{}","nonce":"abcdefghijklmnop","envelopeId":"123e4567-e89b-12d3-a456-426614174000","issuedAt":{},"expiresAt":{},"signature":""}},"canonicalAction":{{}}}}"#,"0".repeat(64),"1".repeat(64),"2".repeat(64),issued,expires).into_bytes()
+    }
+    #[test]
+    fn rejects_noncanonical_timestamp_text() {
+        for s in ["1.0", "1e3", "-0", "+1", "01", ""] {
+            assert!(canonical_u64(s).is_err());
+        }
+        assert_eq!(canonical_u64("0"), Ok(0));
+        assert_eq!(canonical_u64("1000"), Ok(1000));
+    }
+    #[test]
+    fn file_claim_is_consume_once() -> Result<(), Box<dyn std::error::Error>> {
+        let d = tempfile::tempdir()?;
+        let s = FileClaimStore::new(d.path(), 10);
+        let id = "123e4567-e89b-12d3-a456-426614174000";
+        assert_eq!(
+            s.claim(&ClaimInput {
+                envelope_id: id,
+                kid: "00",
+                action_hash: "11",
+                issued: 100,
+                expires: 130,
+                now: 101,
+                approval_id: None
+            }),
+            Ok(())
+        );
+        assert_eq!(
+            s.claim(&ClaimInput {
+                envelope_id: id,
+                kid: "00",
+                action_hash: "11",
+                issued: 100,
+                expires: 130,
+                now: 101,
+                approval_id: None
+            }),
+            Err(ClaimCode::Replay)
+        );
+        assert_eq!(s.status(id, 105), Ok(ClaimStatus::Claimed));
+        assert_eq!(s.status(id, 112), Ok(ClaimStatus::Unknown));
+        Ok(())
+    }
+    #[test]
+    fn file_claim_terminal_state() -> Result<(), Box<dyn std::error::Error>> {
+        let d = tempfile::tempdir()?;
+        let s = FileClaimStore::new(d.path(), 10);
+        let id = "123e4567-e89b-12d3-a456-426614174001";
+        assert_eq!(
+            s.claim(&ClaimInput {
+                envelope_id: id,
+                kid: "00",
+                action_hash: "11",
+                issued: 100,
+                expires: 130,
+                now: 101,
+                approval_id: None
+            }),
+            Ok(())
+        );
+        assert_eq!(s.complete(id, true, 102, None), Ok(()));
+        assert_eq!(s.status(id, 200), Ok(ClaimStatus::Executed));
+        Ok(())
+    }
+    #[test]
+    fn rejects_duplicate_key_with_specific_code() {
+        let keys = HashMap::new();
+        let revoked = HashSet::new();
+        let c = ctx(&keys, &revoked);
+        let raw = br#"{"decisionEnvelope":{"type":"decision","type":"decision"}}"#;
+        assert_eq!(verify_envelope(raw, &c), Err(VerifyCode::DuplicateKey));
+    }
+    #[test]
+    fn rejects_removed_not_before_as_unknown_field() {
+        let keys = HashMap::new();
+        let revoked = HashSet::new();
+        let c = ctx(&keys, &revoked);
+        let mut raw = envelope_with_times(r#""1000""#, r#""1030""#);
+        let needle = b"\"issuedAt\":";
+        if let Some(pos) = raw.windows(needle.len()).position(|w| w == needle) {
+            raw.splice(pos..pos, b"\"notBefore\":\"999\",".iter().copied());
+        }
+        assert_eq!(verify_envelope(&raw, &c), Err(VerifyCode::UnknownField));
+    }
+    #[test]
+    fn rejects_numeric_timestamp_tokens() {
+        let keys = HashMap::new();
+        let revoked = HashSet::new();
+        let c = ctx(&keys, &revoked);
+        for tok in ["1.0", "1e3", "-0"] {
+            assert_eq!(
+                verify_envelope(&envelope_with_times(tok, r#""1030""#), &c),
+                Err(VerifyCode::NonCanonicalNumber)
+            );
+        }
+        assert_eq!(
+            verify_envelope(&envelope_with_times("+1", r#""1030""#), &c),
+            Err(VerifyCode::Parse)
+        );
+    }
+    #[test]
+    fn rejects_time_order_before_subtraction() {
+        let keys = HashMap::new();
+        let revoked = HashSet::new();
+        let c = ctx(&keys, &revoked);
+        assert_eq!(
+            verify_envelope(&envelope_with_times(r#""1000""#, r#""1000""#), &c),
+            Err(VerifyCode::TimeOrder)
+        );
+        assert_eq!(
+            verify_envelope(&envelope_with_times(r#""1001""#, r#""1000""#), &c),
+            Err(VerifyCode::TimeOrder)
+        );
+    }
+    #[test]
+    fn concurrent_double_claim_exactly_one_wins() -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::{Arc, Barrier};
+        let d = tempfile::tempdir()?;
+        let root = d.path().to_path_buf();
+        let barrier = Arc::new(Barrier::new(3));
+        let id = "123e4567-e89b-12d3-a456-426614174099".to_owned();
+        let mut hs = Vec::new();
+        for _ in 0..2 {
+            let b = Arc::clone(&barrier);
+            let r = root.clone();
+            let i = id.clone();
+            hs.push(std::thread::spawn(move || {
+                let s = FileClaimStore::new(r, 10);
+                b.wait();
+                s.claim(&ClaimInput {
+                    envelope_id: &i,
+                    kid: "00",
+                    action_hash: "11",
+                    issued: 100,
+                    expires: 130,
+                    now: 101,
+                    approval_id: None,
+                })
+            }));
+        }
+        barrier.wait();
+        let mut ok = 0usize;
+        let mut replay = 0usize;
+        for h in hs {
+            match h.join() {
+                Ok(Ok(())) => ok = ok.saturating_add(1),
+                Ok(Err(ClaimCode::Replay)) => replay = replay.saturating_add(1),
+                _ => {}
+            }
+        }
+        assert_eq!(ok, 1);
+        assert_eq!(replay, 1);
+        Ok(())
+    }
+    #[test]
+    fn claim_store_down_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+        let d = tempfile::tempdir()?;
+        let blocker = d.path().join("not-a-dir");
+        std::fs::write(&blocker, b"x")?;
+        let s = FileClaimStore::new(&blocker, 10);
+        let id = "123e4567-e89b-12d3-a456-426614174098";
+        assert_eq!(
+            s.claim(&ClaimInput {
+                envelope_id: id,
+                kid: "00",
+                action_hash: "11",
+                issued: 100,
+                expires: 130,
+                now: 101,
+                approval_id: None
+            }),
+            Err(ClaimCode::StoreUnavailable)
+        );
+        Ok(())
+    }
+    #[test]
+    fn rejects_timestamp_above_js_safe_integer() {
+        assert_eq!(
+            canonical_u64("9007199254740992"),
+            Err(VerifyCode::TimestampRange)
+        );
+        assert_eq!(canonical_u64("9007199254740991"), Ok(9_007_199_254_740_991));
+    }
+
+    #[test]
+    fn keyring_kid_mismatch_fails_startup() -> Result<(), Box<dyn std::error::Error>> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+        let d = tempfile::tempdir()?;
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let doc = serde_json::json!({"keys":[{"kid":"00".repeat(32),"role":"decision","publicKey":B64.encode(key.verifying_key().to_bytes())}],"revokedKids":[]});
+        let p = d.path().join("keyring.json");
+        std::fs::write(&p, doc.to_string())?;
+        assert!(load_keyring_file(&p).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn gate_requires_separate_approval_role_and_binds_artifact()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+        use ed25519_dalek::Signer;
+        use sha2::{Digest, Sha256};
+        let decision_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+        let approval_key = ed25519_dalek::SigningKey::from_bytes(&[22u8; 32]);
+        let dkid = hex::encode(Sha256::digest(decision_key.verifying_key().to_bytes()));
+        let akid = hex::encode(Sha256::digest(approval_key.verifying_key().to_bytes()));
+        let mut keys = HashMap::new();
+        keys.insert(
+            dkid.clone(),
+            TrustedKey {
+                public_key: decision_key.verifying_key().to_bytes(),
+                role: KeyRole::Decision,
+            },
+        );
+        keys.insert(
+            akid.clone(),
+            TrustedKey {
+                public_key: approval_key.verifying_key().to_bytes(),
+                role: KeyRole::Approval,
+            },
+        );
+        let revoked = HashSet::new();
+        let c = VerifyContext {
+            keys: &keys,
+            revoked: &revoked,
+            expected_audience: "zdx-executor",
+            expected_release: "release-1",
+            now: 1000,
+            skew: 5,
+            max_validity: 60,
+            max_body: 1_048_576,
+        };
+        let action = serde_json::json!({"kind":"tool","tool":"danger","args":{"x":1}});
+        let ah = super::canonical_action_hash(&action)?;
+        let eid = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174010")?;
+        let df = DecisionSigningFields {
+            decision: DecisionKind::Gate,
+            release_id: "release-1",
+            audience: "zdx-executor",
+            kid: &dkid,
+            profile_hash: &"a".repeat(64),
+            action_hash: &ah,
+            nonce: "abcdefghijklmnop",
+            envelope_id: &eid,
+            issued_at: 995,
+            expires_at: 1030,
+        };
+        let dsig = decision_key.sign(&decision_signing_bytes(&df)?);
+        let decision_json = serde_json::json!({"decisionEnvelope":{"type":"decision","version":"2","algorithm":"Ed25519","decision":"GATE","kid":dkid,"releaseId":"release-1","audience":"zdx-executor","profileHash":"a".repeat(64),"canonicalActionHash":ah,"nonce":"abcdefghijklmnop","envelopeId":eid.hyphenated().to_string(),"issuedAt":"995","expiresAt":"1030","signature":B64.encode(dsig.to_bytes())},"canonicalAction":action});
+        let vd = verify_decision(decision_json.to_string().as_bytes(), &c)?;
+        assert_eq!(vd.decision, DecisionKind::Gate);
+        let aid = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174011")?;
+        let af = ApprovalSigningFields {
+            release_id: "release-1",
+            audience: "zdx-executor",
+            kid: &akid,
+            profile_hash: &vd.profile_hash,
+            action_hash: &vd.action_hash,
+            decision_envelope_id: &eid,
+            approval_id: &aid,
+            approver: "operator-1",
+            issued_at: 1000,
+            expires_at: 1020,
+        };
+        let asig = approval_key.sign(&approval_signing_bytes(&af)?);
+        let approval_json = serde_json::json!({"approvalArtifact":{"type":"approval","version":"1","algorithm":"Ed25519","decision":"APPROVE","kid":akid,"releaseId":"release-1","audience":"zdx-executor","profileHash":vd.profile_hash,"canonicalActionHash":vd.action_hash,"decisionEnvelopeId":vd.envelope_id,"approvalId":aid.hyphenated().to_string(),"approver":"operator-1","issuedAt":"1000","expiresAt":"1020","signature":B64.encode(asig.to_bytes())}});
+        let va = verify_approval(approval_json.to_string().as_bytes(), &vd, &c)?;
+        assert_eq!(va.approval_id, aid.hyphenated().to_string());
+        Ok(())
+    }
+    #[test]
+    fn every_single_byte_mutation_of_signed_preimage_is_rejected()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use ed25519_dalek::Signer;
+        let key = ed25519_dalek::SigningKey::from_bytes(&[31u8; 32]);
+        let envelope_id = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174555")?;
+        let fields = DecisionSigningFields {
+            decision: DecisionKind::Retain,
+            release_id: "release-1",
+            audience: "zdx-executor",
+            kid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            profile_hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            action_hash: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            nonce: "abcdefghijklmnop",
+            envelope_id: &envelope_id,
+            issued_at: 1_700_000_000,
+            expires_at: 1_700_000_030,
+        };
+        let bytes = decision_signing_bytes(&fields)?;
+        let sig = key.sign(&bytes);
+        assert!(key.verifying_key().verify_strict(&bytes, &sig).is_ok());
+        for i in 0..bytes.len() {
+            let mut mutated = bytes.clone();
+            if let Some(b) = mutated.get_mut(i) {
+                *b ^= 1;
+            }
+            assert!(
+                key.verifying_key().verify_strict(&mutated, &sig).is_err(),
+                "single-byte signed-preimage mutation accepted at offset {i}"
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn approval_id_is_consume_once_across_envelopes() -> Result<(), Box<dyn std::error::Error>> {
+        let d = tempfile::tempdir()?;
+        let s = FileClaimStore::new(d.path(), 10);
+        let approval = "123e4567-e89b-12d3-a456-426614174777";
+        let first = ClaimInput {
+            envelope_id: "123e4567-e89b-12d3-a456-426614174701",
+            kid: "00",
+            action_hash: "11",
+            issued: 100,
+            expires: 130,
+            now: 101,
+            approval_id: Some(approval),
+        };
+        let second = ClaimInput {
+            envelope_id: "123e4567-e89b-12d3-a456-426614174702",
+            kid: "00",
+            action_hash: "11",
+            issued: 100,
+            expires: 130,
+            now: 101,
+            approval_id: Some(approval),
+        };
+        assert_eq!(s.claim(&first), Ok(()));
+        assert_eq!(s.claim(&second), Err(ClaimCode::Replay));
+        Ok(())
+    }
+}
