@@ -1,0 +1,1 @@
+import fs from'node:fs';import{validateProfile}from'../src/profile.mjs';const p=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));const r=validateProfile(p);console.log(JSON.stringify(r,null,2));if(!r.valid)process.exit(1);
