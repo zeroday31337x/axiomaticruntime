@@ -15,3 +15,5 @@ test('RETAIN explicit mutation',()=>assert.equal(e({profile:p,proposal:{kind:'to
 test('invalid profile fails closed',()=>assert.equal(e({profile:null,proposal:{kind:'tool',tool:'read'}}).decision,'PRUNE'));
 test('profile cannot self-expand tool authority',()=>{const x=structuredClone(p);x.policy.allowedTools=['read'];x.policy.mutatingTools=[];assert.equal(e({profile:x,proposal:{kind:'tool',tool:'write'},explicitAction:true}).decision,'PRUNE')});
 test('branch id is deterministic',()=>{const input={profile:p,proposal:{kind:'tool',tool:'read'}};assert.equal(e(input).branchId,e(input).branchId)});
+test('PRUNE non-canonical leading command whitespace',()=>assert.equal(e({profile:p,proposal:{kind:'command',command:'  ./deploy prod'},explicitAction:true}).decision,'PRUNE'));
+test('PRUNE non-canonical trailing command whitespace',()=>assert.equal(e({profile:p,proposal:{kind:'command',command:'./deploy prod  '},explicitAction:true}).decision,'PRUNE'));
