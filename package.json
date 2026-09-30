@@ -1,0 +1,1 @@
+{"name":"@zerodrivex/axiomatic-runtime","version":"1.0.0","private":true,"type":"module","scripts":{"start":"node src/server.mjs","test":"node --test test/*.test.mjs","validate:profile":"node scripts/validate-profile.mjs profiles/zdx-validated-v1.json"},"engines":{"node":">=22"}}
