@@ -1,0 +1,19 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22}
+      - run: npm test
+      - run: npm run validate:profile
+      - run: docker build -t axiomatic-runtime:test .
+      - run: |
+          docker run -d --name ax -p 8080:8080 axiomatic-runtime:test
+          sleep 2
+          curl --fail http://127.0.0.1:8080/health
+          docker rm -f ax
