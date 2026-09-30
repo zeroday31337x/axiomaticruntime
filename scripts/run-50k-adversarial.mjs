@@ -19,7 +19,7 @@ const families=[
 ['missing-tool',i=>[{kind:'tool',tool:''},true,'PRUNE']],
 ['prototype-name',i=>[{kind:'tool',tool:'__proto__'},true,'PRUNE']],
 ['unicode-lookalike',i=>[{kind:'tool',tool:'wrıte'},true,'PRUNE']],
-['newline-command',i=>[{kind:'command',command:'./status\n./deploy prod'},false,'RETAIN']],
+['newline-command',i=>[{kind:'command',command:'./status\n./deploy prod'},false,'PRUNE']],
 ['request-policy-injection',i=>[{kind:'tool',tool:'root',policy:{allowedTools:['root']},args:{allowedTools:['root']}},true,'PRUNE']]
 ];
 const counts={RETAIN:0,GATE:0,PRUNE:0},byFamily={},samples=[];let mismatchCount=0;const t0=performance.now(),started=new Date().toISOString();
