@@ -17,3 +17,5 @@ test('profile cannot self-expand tool authority',()=>{const x=structuredClone(p)
 test('branch id is deterministic',()=>{const input={profile:p,proposal:{kind:'tool',tool:'read'}};assert.equal(e(input).branchId,e(input).branchId)});
 test('PRUNE non-canonical leading command whitespace',()=>assert.equal(e({profile:p,proposal:{kind:'command',command:'  ./deploy prod'},explicitAction:true}).decision,'PRUNE'));
 test('PRUNE non-canonical trailing command whitespace',()=>assert.equal(e({profile:p,proposal:{kind:'command',command:'./deploy prod  '},explicitAction:true}).decision,'PRUNE'));
+test('PRUNE shell operators in commands',()=>{for(const command of ['./status && ./deploy prod','./status | ./deploy prod','./status\n./deploy prod'])assert.equal(e({profile:p,proposal:{kind:'command',command},explicitAction:true}).decision,'PRUNE')});
+test('PRUNE non-string and non-canonical tools',()=>{for(const tool of [['write'],{toString:()=> 'write'},' write','write\n'])assert.equal(e({profile:p,proposal:{kind:'tool',tool},explicitAction:true}).decision,'PRUNE')});
