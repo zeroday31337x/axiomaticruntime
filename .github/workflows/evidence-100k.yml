@@ -1,0 +1,23 @@
+name: 100K Evidence Run
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/run-100k-evidence.mjs
+        env:
+          AXIOMATIC_CASES: 100000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axiomatic-100k-evidence
+          path: artifacts/axiomatic-100k-report.json
+          if-no-files-found: error
