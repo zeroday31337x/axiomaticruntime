@@ -13,7 +13,10 @@ jobs:
       - run: npm run validate:profile
       - run: docker build -t axiomatic-runtime:test .
       - run: |
-          docker run -d --name ax -p 8080:8080 axiomatic-runtime:test
+          TOKEN='ci-only-axiomatic-runtime-token-00000001'
+          docker run -d --name ax -p 8080:8080 -e AXIOMATIC_RUNTIME_TOKEN="$TOKEN" axiomatic-runtime:test
           sleep 2
           curl --fail http://127.0.0.1:8080/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/v1/evaluate -H 'content-type: application/json' -d '{"proposal":{"kind":"reply","reply":"ok"}}')" = "401"
+          curl --fail -X POST http://127.0.0.1:8080/v1/evaluate -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"proposal":{"kind":"reply","reply":"ok"}}' | grep '"decision":"RETAIN"'
           docker rm -f ax
