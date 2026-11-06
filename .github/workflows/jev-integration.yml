@@ -25,7 +25,7 @@ jobs:
       - name: Benchmark CPU classifier scaffold
         run: node jev-service/benchmark.mjs
       - name: Validate Python trainer syntax
-        run: python3 -m py_compile jev-service/train.py
+        run: python3 -m py_compile jev-service/train.py jev-service/distill.py
       - name: Train synthetic fixtures and validate model artifact
         run: |
           python3 jev-service/test/trainer-smoke.py
