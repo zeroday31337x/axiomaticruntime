@@ -1,0 +1,22 @@
+name: JEV integration tests
+on:
+  pull_request:
+  push:
+    branches: [feature/jev-advisory-adapter]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Runtime integration tests
+        run: npm test
+      - name: JEV service tests
+        run: npm test
+        working-directory: jev-service
+      - name: Build CPU-only JEV service image
+        run: docker build -t zdx-jev-dev ./jev-service
