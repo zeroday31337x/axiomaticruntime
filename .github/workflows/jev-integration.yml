@@ -20,5 +20,7 @@ jobs:
         working-directory: jev-service
       - name: Benchmark CPU classifier scaffold
         run: node jev-service/benchmark.mjs
+      - name: Validate Python trainer syntax
+        run: python3 -m py_compile jev-service/train.py
       - name: Build CPU-only JEV service image
         run: docker build -t zdx-jev-dev ./jev-service
