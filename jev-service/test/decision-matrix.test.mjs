@@ -22,7 +22,7 @@ test('invalid or missing JEV decision cannot retain', () => {
 });
 test('matrix agrees with existing runtime adapter for valid predictions', () => {
   for (const host of HOST) for (const jev of ['ALLOW', 'DENY', 'FLAG']) {
-    const result = applyJevAdvisory({ decision: host }, jev);
-    assert.equal(result.decision, resolveMatrix(host, jev), host + '/' + jev);
+    const result = applyJevAdvisory(host, jev);
+    assert.equal(result, resolveMatrix(host, jev), host + '/' + jev);
   }
 });
