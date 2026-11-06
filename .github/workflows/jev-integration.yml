@@ -22,5 +22,24 @@ jobs:
         run: node jev-service/benchmark.mjs
       - name: Validate Python trainer syntax
         run: python3 -m py_compile jev-service/train.py
+      - name: Train synthetic fixtures and validate model artifact
+        run: |
+          python3 jev-service/test/trainer-smoke.py
+          python3 - <<'PY'
+          import json
+          import subprocess
+          import tempfile
+          from pathlib import Path
+          with tempfile.TemporaryDirectory() as tmp:
+              data = Path(tmp) / 'examples.jsonl'
+              out = Path(tmp) / 'artifact.json'
+              rows = []
+              for i in range(90):
+                  k = i % 3
+                  rows.append({'context': {'route': ['/health', '/admin/settings', '/v1/unknown'][k], 'method': ['GET', 'DELETE', 'POST'][k]}, 'label': ['ALLOW', 'DENY', 'FLAG'][k], 'group': f'case-{i}'})
+              data.write_text('\\n'.join(json.dumps(r) for r in rows) + '\\n')
+              subprocess.run(['python3', 'jev-service/train.py', '--data', str(data), '--out', str(out)], check=True)
+              subprocess.run(['node', '--test', 'jev-service/test/artifact-contract.mjs'], check=True, env=__import__('os').environ | {'JEV_TEST_ARTIFACT': str(out)})
+          PY
       - name: Build CPU-only JEV service image
         run: docker build -t zdx-jev-dev ./jev-service
