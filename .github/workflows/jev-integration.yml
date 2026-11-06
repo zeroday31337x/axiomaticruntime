@@ -18,6 +18,10 @@ jobs:
       - name: JEV service tests
         run: npm test
         working-directory: jev-service
+      - name: Authenticated HTTP service integration smoke tests
+        run: |
+          node jev-service/test/http-smoke.mjs
+          node jev-service/test/client-http-smoke.mjs
       - name: Benchmark CPU classifier scaffold
         run: node jev-service/benchmark.mjs
       - name: Validate Python trainer syntax
