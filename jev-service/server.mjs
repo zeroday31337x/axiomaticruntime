@@ -1,6 +1,8 @@
 import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { classify } from './classifier.mjs';
+import { loadExperimentalModel } from './model-loader.mjs';
+const shadow = loadExperimentalModel({ path: process.env.JEV_EXPERIMENTAL_MODEL_PATH, expectedSha256: process.env.JEV_EXPERIMENTAL_MODEL_SHA256, enabled: process.env.JEV_SHADOW_MODE === 'true' });
 const token = process.env.JEV_SERVICE_TOKEN;
 if (!token || Buffer.byteLength(token) < 32) {
   console.error('JEV_SERVICE_TOKEN must be at least 32 bytes'); process.exit(1);
@@ -19,7 +21,7 @@ http.createServer((req, res) => {
   res.setHeader('content-type', 'application/json');
   res.setHeader('cache-control', 'no-store');
   if (req.method === 'GET' && req.url === '/health') {
-    res.end(JSON.stringify({ ok: true, modelVersion: 'baseline-rules-0.1', trained: false })); return;
+    res.end(JSON.stringify({ ok: true, modelVersion: 'baseline-rules-0.1', trained: false, shadowLoaded: Boolean(shadow) })); return;
   }
   if (req.method !== 'POST' || req.url !== '/v1/classify') {
     res.writeHead(404).end(JSON.stringify({ error: 'not_found' })); return;
@@ -37,7 +39,13 @@ http.createServer((req, res) => {
     if (size > 16384) return;
     try {
       const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      res.end(JSON.stringify(classify(input)));
+      const result = classify(input);
+      // Shadow results are for controlled offline comparison, never enforcement.
+      if (shadow) {
+        const candidate = shadow.predict(input?.context);
+        result.shadow = { decision: candidate.decision, reason: candidate.reason, modelVersion: shadow.version };
+      }
+      res.end(JSON.stringify(result));
     } catch { res.writeHead(400).end(JSON.stringify({ error: 'invalid_json' })); }
   });
 }).listen(port, host);
