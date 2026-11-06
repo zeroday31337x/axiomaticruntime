@@ -18,5 +18,7 @@ jobs:
       - name: JEV service tests
         run: npm test
         working-directory: jev-service
+      - name: Benchmark CPU classifier scaffold
+        run: node jev-service/benchmark.mjs
       - name: Build CPU-only JEV service image
         run: docker build -t zdx-jev-dev ./jev-service
