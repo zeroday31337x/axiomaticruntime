@@ -37,7 +37,7 @@ jobs:
               for i in range(90):
                   k = i % 3
                   rows.append({'context': {'route': ['/health', '/admin/settings', '/v1/unknown'][k], 'method': ['GET', 'DELETE', 'POST'][k]}, 'label': ['ALLOW', 'DENY', 'FLAG'][k], 'group': f'case-{i}'})
-              data.write_text('\\n'.join(json.dumps(r) for r in rows) + '\\n')
+              data.write_text(chr(10).join(json.dumps(r) for r in rows) + chr(10))
               subprocess.run(['python3', 'jev-service/train.py', '--data', str(data), '--out', str(out)], check=True)
               subprocess.run(['node', '--test', 'jev-service/test/artifact-contract.mjs'], check=True, env=__import__('os').environ | {'JEV_TEST_ARTIFACT': str(out)})
           PY
