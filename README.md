@@ -22,3 +22,23 @@ AXIOMATIC_RUNTIME_TOKEN='<secret>' node src/server.mjs
 ```
 
 HTTP: unauthenticated `GET /health`; authenticated `POST /v1/evaluate`.
+
+
+## Runtime hardening (development branch)
+
+- Every proposal must declare its kind: reply, command, or tool. Unknown or
+  malformed proposals are PRUNE, and bad profiles fail closed at startup and
+  at the library evaluation boundary.
+- The runtime checks canonical allowlists, bounds, suspicious shell syntax, and
+  requires host-owned explicit authorization for mutating tools and commands.
+- The API caps JSON request bodies at 1 MiB and enforces request and header
+  timeouts. Only the host supplies the active policy; request input cannot
+  replace it.
+- A RETAIN decision is not a substitute for per-tool argument validation,
+  host identity/entitlement checks, command-argument separation, and
+  authorization immediately before every consequential side effect.
+- No simulation gravity/truth-field metric is used for authorization.
+- The validated baseline profile and versioned profile schema identity
+  remain unchanged. Untrusted/custom profiles must be independently validated.
+
+Run npm test and npm run validate:profile.
