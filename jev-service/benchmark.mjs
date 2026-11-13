@@ -1,0 +1,10 @@
+import { performance } from 'node:perf_hooks';
+import { featureNames, predict } from './linear-model.mjs';
+const weights = [Array(featureNames.length).fill(0), Array(featureNames.length).fill(0), Array(featureNames.length).fill(0)];
+const artifact = { schemaVersion: '1', classes: ['ALLOW','DENY','FLAG'], featureNames: [...featureNames], weights };
+const count = Number(process.env.BENCH_ITERATIONS || 100000);
+if (!Number.isInteger(count) || count < 1 || count > 10000000) process.exit(1);
+const start = performance.now();
+for (let i = 0; i < count; i++) predict({ route: i % 2 ? '/admin' : '/health', method: 'GET' }, artifact);
+const elapsed = performance.now() - start;
+console.log(JSON.stringify({ engine: 'linear-scaffold', count, totalMs: elapsed, averageMs: elapsed / count, rssMb: process.memoryUsage().rss / 1048576 }));
